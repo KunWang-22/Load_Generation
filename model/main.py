@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
 
 import argparse
 import pickle
@@ -221,8 +222,9 @@ class Model(nn.Module):
 
 
 class Dataset_UKDA(Dataset):
-    def __init__(self, file_path, aggregation_num):
-        origin, condition = get_dataset(file_path, aggregation_num)
+    def __init__(self, file_path, aggregation_num, mode, test_user, test_day):
+        origin, condition, scaler = get_dataset(file_path, aggregation_num, mode, test_user, test_day)
+        self.scaler = scaler
         self.origin = torch.from_numpy(origin).type(torch.float32).unsqueeze(-1)
         self.condition = torch.from_numpy(condition).type(torch.float32).unsqueeze(-1)
 
@@ -234,7 +236,7 @@ class Dataset_UKDA(Dataset):
 
 
 
-def get_dataset(file_path, aggregation_num):
+def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
     original_data = pd.read_csv(file_path)
 
     aggregated_data = pd.DataFrame()
@@ -243,6 +245,9 @@ def get_dataset(file_path, aggregation_num):
         temp_data = original_data.iloc[:, (1+i*aggregation_num):(1+(i+1)*aggregation_num)].sum(axis=1)
         temp_name = "user_" + str(i+1)
         aggregated_data[temp_name] = temp_data
+
+    scaler = StandardScaler().fit(aggregated_data.iloc[:, 1:])
+    aggregated_data.iloc[:, 1:] = scaler.transform(aggregated_data.iloc[:, 1:])
 
     aggregated_data["month"] = [aggregated_data["time"][i].month for i in range(aggregated_data.shape[0])]
     aggregated_data["day"] = [aggregated_data["time"][i].day for i in range(aggregated_data.shape[0])]
@@ -262,15 +267,22 @@ def get_dataset(file_path, aggregation_num):
             user_data = np.append(user_data, month_data.flatten())
         condition_data[user] = user_data
 
-    origin = aggregated_data.iloc[:, 1:-4].values.T.reshape(-1,48)
-    condition = condition_data.iloc[:, 1:].values.T.reshape(-1,48)
+    all_origin = aggregated_data.iloc[:, 1:-4].values.T.reshape(condition_data.shape[1]-1, -1, 48)
+    all_condition = condition_data.iloc[:, 1:].values.T.reshape(condition_data.shape[1]-1, -1, 48)
 
-    return origin, condition
+    if mode == "train":
+        origin = np.concatenate((all_origin[:-test_user].reshape(-1, 48), all_origin[-test_user:, :-test_day, :].reshape(-1, 48)), axis=0)
+        condition = np.concatenate((all_condition[:-test_user].reshape(-1, 48), all_condition[-test_user:, :-test_day, :].reshape(-1, 48)), axis=0)
+    elif mode == "test":
+        origin = all_origin[-test_user:, -test_day:, :].reshape(-1,48)
+        condition = all_condition[-test_user:, -test_day:, :].reshape(-1,48)
+    
+    return origin, condition, scaler
 
 
 
 def train(args, device):
-    train_dataset = Dataset_UKDA(args.file_path, args.aggregation_num)
+    train_dataset = Dataset_UKDA(args.file_path, args.aggregation_num, args.mode, args.test_user, args.test_day)
     train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True)
 
     model = Model(args.input_dim, args.condition_input_dim, args.embedding_dim, args.num_head, args.num_layer, args.num_block, args.dropout, device).to(device)
@@ -278,7 +290,7 @@ def train(args, device):
     # 这次可以使用“MSE+KL"的指标共同作为模型的loss
     criterion = nn.MSELoss()
     diffusion = Diffusion(noise_step=args.noise_step, beta_start=args.beta_start, beta_end=args.beta_end, data_length=args.data_length, device=device)
-
+    
     print("Start Traning !!!")
     for epoch in range(args.num_epoch):
         losses = []
@@ -305,6 +317,9 @@ if __name__ == "__main__":
     # Dataset 参数
     parser.add_argument("--file_path", type=str, default="../data/UKDA_2013_clean.csv")
     parser.add_argument("--aggregation_num", type=int, default=10)
+    parser.add_argument("--mode", type=str, default="train")
+    parser.add_argument("--test_user", type=int, default=10)
+    parser.add_argument("--test_day", type=int, default=30)
     # Diffusion 参数
     parser.add_argument("--noise_step", type=int, default=50)
     parser.add_argument("--beta_start", type=float, default=0.0001)
