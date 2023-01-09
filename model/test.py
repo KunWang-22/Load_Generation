@@ -28,22 +28,18 @@ def test(args, device):
     test_dataloader = DataLoader(test_dataset, len(test_dataset), shuffle=True)
 
     model = Model(args.input_dim, args.condition_input_dim, args.embedding_dim, args.num_head, args.num_layer, args.num_block, args.dropout, device).to(device)
-    # model.load_state_dict(torch.load("../log/model/model.pt"))
+    model.load_state_dict(torch.load("../log/model/model.pt"))
+    print("Load model successfully !!!")
     diffusion = Diffusion(noise_step=args.noise_step, beta_start=args.beta_start, beta_end=args.beta_end, data_length=args.data_length, device=device)
 
     print("Start Test !!!")
-    # real_data = []
-    # generated_data = []
     for i, (data, condition) in enumerate(test_dataloader):
         condition = condition.to(device)
-        # print(condition.shape)
         predicted = diffusion.sample(model, len(test_dataloader), condition)
 
         reverse_real_data = reverse_data(data.squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1))
-        print(reverse_real_data.shape)
         reverse_generated_data = reverse_data(predicted.cpu().detach().squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1))
-        # print(reverse_real_data)
-        # print(reverse_generated_data)
+
     np.save("../result/real_data.npy", reverse_real_data.reshape(args.test_user, args.test_day, -1).numpy())
     np.save("../result/generated_data.npy", reverse_generated_data.reshape(args.test_user, args.test_day, -1).numpy())
 

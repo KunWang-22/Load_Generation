@@ -276,7 +276,7 @@ def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
     elif mode == "test":
         origin = all_origin[-test_user:, -test_day:, :].reshape(-1,48)
         condition = all_condition[-test_user:, -test_day:, :].reshape(-1,48)
-    
+        # print(origin.shape)
     return origin, condition, scaler
 
 
