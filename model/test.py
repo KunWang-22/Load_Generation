@@ -92,7 +92,7 @@ class Timestep_Embedding(nn.Module):
         frequency = torch.pow(10, torch.arange(self.embedding_dim//2) / (self.embedding_dim//2-1) * 4.0).to(self.device)
         emb_sin = torch.sin(t_seq * frequency)
         emb_cos = torch.cos(t_seq * frequency)
-        embedding = torch.cat([emb_sin, emb_cos], dim=1)
+        embedding = torch.cat([emb_sin, emb_cos], dim=1).to(self.device)
         return embedding
 
 
@@ -108,7 +108,7 @@ class PE_Embedding(nn.Module):
     def forward(self, x):
         data_length = x.shape[1]
         x = self.fc(x)
-        x = x + self._position_encoding(data_length)
+        x = x + self._position_encoding(data_length).to(self.device)
         return x
 
     def _position_encoding(self, data_length):
@@ -116,7 +116,7 @@ class PE_Embedding(nn.Module):
         position = torch.arange(data_length).unsqueeze(1).to(self.device)
         encoding[:, 0::2] = torch.sin( position / torch.pow(10000, torch.arange(0, self.embedding_dim, 2).to(self.device)/self.embedding_dim) )
         encoding[:, 1::2] = torch.cos( position / torch.pow(10000, torch.arange(1, self.embedding_dim, 2).to(self.device)/self.embedding_dim) )
-        return encoding
+        return encoding.to(self.device)
 
 
 
@@ -175,6 +175,8 @@ class Residual_Block(nn.Module):
             x = attention_layer(x)
         
         condition_emb = self.condtion_embbeding(condition)
+        # print(x.shape)
+        # print(self.fc_condition(condition_emb).shape)
         x = x + self.fc_condition(condition_emb)
         
         x_1, x_2 = torch.chunk(x, 2, dim=-1)
@@ -252,7 +254,7 @@ def get_dataset(file_path, aggregation_num):
 
     condition_data = pd.DataFrame()
     condition_data["time"] = aggregated_data["time"]
-    condition_df = aggregated_data.groupby(["month", "day", "hour", "minute"]).mean(numeric_only=False).round(3)
+    condition_df = aggregated_data.groupby(["month", "day", "hour", "minute"]).agg("mean").round(3)
     for user in aggregated_data.columns[1:-4]:
         user_data = np.array([])
         for month in month_index.index:
@@ -269,34 +271,26 @@ def get_dataset(file_path, aggregation_num):
 
 
 
-def train(args, device):
-    train_dataset = Dataset_UKDA(args.file_path, args.aggregation_num)
-    train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True)
+def test(args, device):
+    test_dataset = Dataset_UKDA(args.file_path, args.aggregation_num)[:100]
+    train_dataloader = DataLoader(test_dataset, args.batch_size, shuffle=False)
 
     model = Model(args.input_dim, args.condition_input_dim, args.embedding_dim, args.num_head, args.num_layer, args.num_block, args.dropout, device).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    # 这次可以使用“MSE+KL"的指标共同作为模型的loss
-    criterion = nn.MSELoss()
+    model.load_state_dict(torch.load("../log/model/model.pt"))
     diffusion = Diffusion(noise_step=args.noise_step, beta_start=args.beta_start, beta_end=args.beta_end, data_length=args.data_length, device=device)
 
-    print("Start Traning !!!")
-    for epoch in range(args.num_epoch):
-        losses = []
-        for i, (data, condition) in enumerate(train_dataloader):
-            data = data.to(device)
-            condition = condition.to(device)
-            t = diffusion.timestep_sample(data.shape[0]).to(device)
-            x_t, noise = diffusion.forward_process(data, t)
-            predicted_noise = model(x_t, t, condition)
-
-            loss = criterion(noise, predicted_noise)
-            losses.append(loss.item())
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        
-        torch.save(model.state_dict(), "../log/model/model.pt")
-        print("Epoch {}/{}, Loss: {}".format(epoch+1, args.num_epoch, np.array(losses, dtype=float).mean()))
+    print("Start Test !!!")
+    real_data = []
+    generated_data = []
+    for i, (data, condition) in enumerate(train_dataloader):
+        real_data.append(data.flatten().tolist())
+        condition = condition.to(device)
+        # print(condition.shape)
+        predicted = diffusion.sample(model, 100, condition)
+        generated_data.append(predicted.cpu().detach().flatten().tolist())
+    
+    np.save("../result/real_data.npy", np.array(real_data))
+    np.save("../result/generated_data.npy", np.array(generated_data))
 
 
 
@@ -315,8 +309,8 @@ if __name__ == "__main__":
     parser.add_argument("--condition_input_dim", type=int, default=1)
     parser.add_argument("--embedding_dim", type=int, default=32)
     parser.add_argument("--num_head", type=int, default=4)
-    parser.add_argument("--num_layer", type=int, default=6)
-    parser.add_argument("--num_block", type=int, default=6)
+    parser.add_argument("--num_layer", type=int, default=4)
+    parser.add_argument("--num_block", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.2)
     
     parser.add_argument("--batch_size", type=int, default=16)
@@ -329,4 +323,4 @@ if __name__ == "__main__":
     args.cuda = not args.cuda and torch.cuda.is_available()
     device = torch.device("cuda" if args.cuda else "cpu")
 
-    train(args, device)
+    test(args, device)
