@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, Dataset
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
 
 import argparse
 import pickle
@@ -23,6 +24,41 @@ def reverse_data(data, mean, std):
     reversed_data = data * std + mean
     return reversed_data
 
+
+def test_new(args, device):
+    all_data = pd.read_csv(args.file_path)
+    
+    test = all_data.iloc[:, -51:-1].sum(axis=1)
+
+    aggregated_data = pd.DataFrame()
+    aggregated_data["time"] = pd.to_datetime(all_data["time"])
+    for i in range((all_data.shape[1]-2)//50):
+        temp_data = all_data.iloc[:, (1+i*50):(1+(i+1)*50)].sum(axis=1)
+        temp_name = "user_" + str(i+1)
+        aggregated_data[temp_name] = temp_data
+
+    scaler = StandardScaler().fit(aggregated_data.iloc[:, 1:])    
+    #     # scaler = StandardScaler().fit(aggregated_data)
+    new_test = (test - scaler.mean_[10]) / scaler.scale_[10]
+
+    test_data = new_test[48*30*0:48*30*1].values.reshape(-1, 48)
+    test_condition = test_data[14].reshape(1, -1).repeat(30, axis=0)
+
+    model = Model(args.input_dim, args.condition_input_dim, args.embedding_dim, args.num_head, args.num_layer, args.num_block, args.dropout, device).to(device)
+    model.load_state_dict(torch.load("../log/model/model.pt"))
+    print("Load model successfully !!!")
+    diffusion = Diffusion(noise_step=args.noise_step, beta_start=args.beta_start, beta_end=args.beta_end, data_length=args.data_length, device=device)
+
+    print("Start Test Add !!!")
+
+    data = torch.from_numpy(test_data).type(torch.float32).unsqueeze(-1)
+    condition = torch.from_numpy(test_condition).type(torch.float32).unsqueeze(-1).to(device)
+    predicted = diffusion.sample(model, 30, condition)
+
+    np.save("../result/real_data_add.npy", data.numpy())
+    np.save("../result/generated_data_add.npy", predicted.cpu().detach().numpy())
+
+
 def test(args, device):
     test_dataset = Dataset_UKDA(args.file_path, args.aggregation_num, args.mode, args.test_user, args.test_day)
     test_dataloader = DataLoader(test_dataset, len(test_dataset), shuffle=True)
@@ -37,8 +73,8 @@ def test(args, device):
         condition = condition.to(device)
         predicted = diffusion.sample(model, len(test_dataloader), condition)
 
-        reverse_real_data = reverse_data(data.squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1))
-        reverse_generated_data = reverse_data(predicted.cpu().detach().squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1))
+        reverse_real_data = reverse_data(data.squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.scale_[-args.test_user:].reshape(-1,1))
+        reverse_generated_data = reverse_data(predicted.cpu().detach().squeeze(-1).reshape(args.test_user, -1), test_dataset.scaler.mean_[-args.test_user:].reshape(-1,1), test_dataset.scaler.scale_[-args.test_user:].reshape(-1,1))
 
     np.save("../result/real_data.npy", reverse_real_data.reshape(args.test_user, args.test_day, -1).numpy())
     np.save("../result/generated_data.npy", reverse_generated_data.reshape(args.test_user, args.test_day, -1).numpy())
@@ -78,3 +114,4 @@ if __name__ == "__main__":
     device = torch.device("cuda" if args.cuda else "cpu")
 
     test(args, device)
+    # test_new(args, device)

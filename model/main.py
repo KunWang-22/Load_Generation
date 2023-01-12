@@ -234,7 +234,35 @@ class Dataset_UKDA(Dataset):
     def __len__(self):
         return self.origin.shape[0]
 
+def get_dataset_self(file_path, aggregation_num, mode, test_user, test_day):
+    original_data = pd.read_csv(file_path)
 
+    aggregated_data = pd.DataFrame()
+    aggregated_data["time"] = pd.to_datetime(original_data["time"])
+    for i in range((original_data.shape[1]-2)//aggregation_num):
+        temp_data = original_data.iloc[:, (1+i*aggregation_num):(1+(i+1)*aggregation_num)].sum(axis=1)
+        temp_name = "user_" + str(i+1)
+        aggregated_data[temp_name] = temp_data
+
+    scaler = StandardScaler().fit(aggregated_data.iloc[:, 1:])
+    aggregated_data.iloc[:, 1:] = scaler.transform(aggregated_data.iloc[:, 1:])
+
+    aggregated_data["month"] = [aggregated_data["time"][i].month for i in range(aggregated_data.shape[0])]
+    aggregated_data["day"] = [aggregated_data["time"][i].day for i in range(aggregated_data.shape[0])]
+    aggregated_data["hour"] = [aggregated_data["time"][i].hour for i in range(aggregated_data.shape[0])]
+    aggregated_data["minute"] = [aggregated_data["time"][i].minute for i in range(aggregated_data.shape[0])]
+    month_index = aggregated_data["month"].value_counts(sort=False)//48
+
+    all_origin = aggregated_data.iloc[:, 1:-4].values.T.reshape(aggregated_data.shape[1]-1-4, -1, 48)
+    all_condition = all_origin + (np.random.randn(*all_origin.shape) / 10)
+
+    if mode == "train":
+        origin = np.concatenate((all_origin[:-test_user].reshape(-1, 48), all_origin[-test_user:, :-test_day, :].reshape(-1, 48)), axis=0)
+        condition = np.concatenate((all_condition[:-test_user].reshape(-1, 48), all_condition[-test_user:, :-test_day, :].reshape(-1, 48)), axis=0)
+    elif mode == "test":
+        origin = all_origin[-test_user:, -test_day:, :].reshape(-1,48)
+        condition = all_condition[-test_user:, -test_day:, :].reshape(-1,48)
+    return origin, condition, scaler
 
 def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
     original_data = pd.read_csv(file_path)
