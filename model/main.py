@@ -222,8 +222,8 @@ class Model(nn.Module):
 
 
 class Dataset_UKDA(Dataset):
-    def __init__(self, file_path, aggregation_num, mode, test_user, test_day):
-        origin, condition, scaler = get_dataset(file_path, aggregation_num, mode, test_user, test_day)
+    def __init__(self, file_path, aggregation_num, mode, test_user, test_day, validation_num):
+        origin, condition, scaler = get_dataset(file_path, aggregation_num, mode, test_user, test_day, validation_num)
         self.scaler = scaler
         self.origin = torch.from_numpy(origin).type(torch.float32).unsqueeze(-1)
         self.condition = torch.from_numpy(condition).type(torch.float32).unsqueeze(-1)
@@ -264,7 +264,7 @@ def get_dataset_self(file_path, aggregation_num, mode, test_user, test_day):
         condition = all_condition[-test_user:, -test_day:, :].reshape(-1,48)
     return origin, condition, scaler
 
-def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
+def get_dataset(file_path, aggregation_num, mode, test_user, test_day, validation_num):
     original_data = pd.read_csv(file_path)
 
     aggregated_data = pd.DataFrame()
@@ -295,8 +295,12 @@ def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
             user_data = np.append(user_data, month_data.flatten())
         condition_data[user] = user_data
 
-    all_origin = aggregated_data.iloc[:, 1:-4].values.T.reshape(condition_data.shape[1]-1, -1, 48)
-    all_condition = condition_data.iloc[:, 1:].values.T.reshape(condition_data.shape[1]-1, -1, 48)
+    if validation_num != 0:
+        all_origin = aggregated_data.iloc[:, 1:-4-validation_num].values.T.reshape(condition_data.shape[1]-1-validation_num, -1, 48)
+        all_condition = condition_data.iloc[:, 1:-validation_num].values.T.reshape(condition_data.shape[1]-1-validation_num, -1, 48)
+    else:
+        all_origin = aggregated_data.iloc[:, 1:-4].values.T.reshape(condition_data.shape[1]-1, -1, 48)
+        all_condition = condition_data.iloc[:, 1:].values.T.reshape(condition_data.shape[1]-1, -1, 48)
 
     if mode == "train":
         origin = np.concatenate((all_origin[:-test_user].reshape(-1, 48), all_origin[-test_user:, :-test_day, :].reshape(-1, 48)), axis=0)
@@ -304,13 +308,16 @@ def get_dataset(file_path, aggregation_num, mode, test_user, test_day):
     elif mode == "test":
         origin = all_origin[-test_user:, -test_day:, :].reshape(-1,48)
         condition = all_condition[-test_user:, -test_day:, :].reshape(-1,48)
-        # print(origin.shape)
+    elif mode == "validation":
+        origin = aggregated_data.iloc[:, -4-validation_num:-4].values.T.reshape(validation_num, -1, 48).reshape(-1,48)
+        condition = condition_data.iloc[:, -validation_num:].values.T.reshape(validation_num, -1, 48).reshape(-1,48)
+
     return origin, condition, scaler
 
 
 
 def train(args, device):
-    train_dataset = Dataset_UKDA(args.file_path, args.aggregation_num, args.mode, args.test_user, args.test_day)
+    train_dataset = Dataset_UKDA(args.file_path, args.aggregation_num, args.mode, args.test_user, args.test_day, args.validation_num)
     train_dataloader = DataLoader(train_dataset, args.batch_size, shuffle=True)
 
     model = Model(args.input_dim, args.condition_input_dim, args.embedding_dim, args.num_head, args.num_layer, args.num_block, args.dropout, device).to(device)
@@ -347,7 +354,8 @@ if __name__ == "__main__":
     parser.add_argument("--aggregation_num", type=int, default=10)
     parser.add_argument("--mode", type=str, default="train")
     parser.add_argument("--test_user", type=int, default=10)
-    parser.add_argument("--test_day", type=int, default=30)
+    parser.add_argument("--test_day", type=int, default=60)
+    parser.add_argument("--validation_num", type=int, default=6)
     # Diffusion 参数
     parser.add_argument("--noise_step", type=int, default=50)
     parser.add_argument("--beta_start", type=float, default=0.0001)
